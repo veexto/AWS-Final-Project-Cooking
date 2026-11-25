@@ -223,7 +223,7 @@
           <label class="block font-bold text-gray-700 mb-1" for="storeAddressInput">Hoặc nhập địa chỉ muốn tìm quanh đó:</label>
           <div class="flex gap-2">
             <input id="storeAddressInput" type="text" maxlength="200" placeholder="Ví dụ: 123 Nguyễn Huệ, Quận 1, TP.HCM" class="min-w-0 flex-1 border border-gray-300 rounded px-3 py-2 text-sm outline-none focus:border-[#cf2127]">
-            <button onclick="renderNearbyStores()" class="shrink-0 bg-foody-red text-white rounded px-3 py-2 font-bold">Tìm</button>
+            <button type="button" onclick="renderNearbyStores()" class="shrink-0 bg-foody-red text-white rounded px-4 py-2 font-bold">Tìm</button>
           </div>
           <p class="mt-1 text-[11px] text-gray-500">Nếu để trống, hệ thống dùng vị trí GPS (nếu đã cấp quyền).</p>
         </div>
@@ -291,6 +291,7 @@
     let savedIds = JSON.parse(localStorage.getItem("btm_saved_recipes") || "[]");
     let userCoords = null;
     let activeTimers = {};
+    let chatSuggestedHistory = [];
 
     const formatMoney = (vnd) => new Intl.NumberFormat("vi-VN").format(vnd || 0) + "đ";
     const difficultyLabel = (d) => d === "medium" ? "Trung bình" : "Dễ làm";
@@ -624,7 +625,7 @@
         pos => {
           userCoords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
           const accuracy = Math.round(pos.coords.accuracy || 0);
-          label.textContent = accuracy > 1000 ? "GPS kém chính xác" : "Gần tôi (GPS)";
+          label.textContent = accuracy > 1000 ? `GPS lệch ~${accuracy}m` : "Gần tôi (GPS)";
           if (refreshModal) {
             if (accuracy > 1000) {
               listBox.innerHTML = `<p class="text-amber-700 py-2">GPS hiện chỉ chính xác khoảng ${accuracy} m. Hãy bật định vị chính xác hoặc nhập địa chỉ để có kết quả tốt hơn.</p>`;
@@ -644,7 +645,7 @@
             listBox.innerHTML = `<p class="text-red-600 py-2">${messages[err.code] || "Không lấy được vị trí GPS."}</p>`;
           }
         },
-        { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
       );
     }
 
@@ -678,32 +679,13 @@
         const res = await fetch(`${STORES_API}?${params.toString()}`);
         const data = await res.json();
 
-        const adviceHtml = `<div class="p-2 bg-amber-50 border border-amber-200 rounded text-amber-900 mb-2">${data.advice || ''}</div>`;
+        const originText = data.origin
+          ? `<p class="text-[11px] text-gray-500 mb-2">📌 Tâm tìm kiếm: <strong>${data.origin.lat.toFixed(5)}, ${data.origin.lng.toFixed(5)}</strong> (bán kính 10 km)</p>`
+          : "";
+        const adviceHtml = `<div class="p-2 bg-amber-50 border border-amber-200 rounded text-amber-900 mb-2">${data.advice || ''}</div>${originText}`;
 
         if (data.stores && data.stores.length > 0) {
-          // Hiển thị đủ 3 nhóm cùng lúc, không gộp chung rồi chỉ sắp xếp thứ tự.
-          const storeGroups = [
-            {
-              key: "low",
-              title: "Tiết kiệm — dưới 35.000đ",
-              subtitle: "Chợ truyền thống, tạp hóa bình dân",
-              stores: data.stores.filter(s => s.budgetGroup === "low")
-            },
-            {
-              key: "mid",
-              title: "Tầm trung — 35.000đ đến 70.000đ",
-              subtitle: "Bách Hóa Xanh, WinMart+, Co.op Food, Satrafood",
-              stores: data.stores.filter(s => s.budgetGroup === "mid")
-            },
-            {
-              key: "high",
-              title: "Cao — trên 70.000đ",
-              subtitle: "Co.opmart, WinMart, GO!, Lotte Mart, Tops Market, Kingfoodmart và siêu thị lớn",
-              stores: data.stores.filter(s => s.budgetGroup === "high")
-            }
-          ];
-
-          const renderStoreCard = s => {
+          const cardsHtml = data.stores.map(s => {
             const distLabel = s.distanceMeters < 1000
               ? `${s.distanceMeters} m`
               : `${(s.distanceMeters / 1000).toFixed(1)} km`;
@@ -732,26 +714,13 @@
                 </a>
               </div>
             `;
-          };
+          }).join("");
 
-          const groupsHtml = storeGroups.map(group => `
-            <section class="mb-4">
-              <div class="border-b border-gray-200 pb-2 mb-2">
-                <h4 class="font-extrabold text-sm text-gray-800">${group.title}</h4>
-                <p class="text-[11px] text-gray-500 mt-0.5">${group.subtitle}</p>
-                <p class="text-[11px] font-semibold text-gray-600 mt-1">${group.stores.length} địa điểm</p>
-              </div>
-              ${group.stores.length
-                ? group.stores.map(renderStoreCard).join("")
-                : '<p class="text-xs text-gray-400 italic py-2">Chưa tìm thấy địa điểm phù hợp trong nhóm này.</p>'}
-            </section>
-          `).join("");
-
-          listBox.innerHTML = adviceHtml + groupsHtml;
+          listBox.innerHTML = adviceHtml + `<div class="space-y-2">${cardsHtml}</div>`;
           return;
         }
 
-        const fallbackQuery = tier === "low" ? `chợ gần đây bán ${ing}` : (tier === "mid" ? "cửa hàng thực phẩm và siêu thị gần đây" : "siêu thị gần đây");
+        const fallbackQuery = tier === "low" ? `chợ gần đây bán ${ing}` : (tier === "mid" ? "Bách Hóa Xanh WinMart+ gần đây" : "siêu thị Co.opmart gần đây");
         const fallbackLocation = data.origin
           ? `${data.origin.lat},${data.origin.lng}`
           : (manualAddress || `${lat},${lng}`);
@@ -759,10 +728,10 @@
         listBox.innerHTML = adviceHtml + `
           <div class="p-3 border border-gray-200 rounded bg-gray-50 flex items-center justify-between gap-2">
             <div>
-              <p class="font-bold text-gray-800">Tìm điểm bán quanh tọa độ hiện tại</p>
-              <p class="text-gray-500 mt-0.5">Mở bản đồ chỉ đường trực tiếp tới điểm bán phù hợp ngân sách.</p>
+              <p class="font-bold text-gray-800">Chưa có cửa hàng khớp bộ lọc trong bán kính 10 km</p>
+              <p class="text-gray-500 mt-0.5">Thử đổi mức ngân sách hoặc mở trực tiếp trên Google Maps.</p>
             </div>
-            <a href="${fallbackMapsUrl}" target="_blank" class="bg-foody-red text-white font-bold px-3 py-1.5 rounded shrink-0">
+            <a href="${fallbackMapsUrl}" target="_blank" rel="noopener noreferrer" class="bg-foody-red text-white font-bold px-3 py-1.5 rounded shrink-0">
               Mở bản đồ ↗
             </a>
           </div>
@@ -774,6 +743,12 @@
 
     document.getElementById("storeBudgetSelect").addEventListener("change", renderNearbyStores);
     document.getElementById("storeIngredientInput").addEventListener("input", renderNearbyStores);
+    document.getElementById("storeAddressInput")?.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        renderNearbyStores();
+      }
+    });
 
     function toggleChatbot(prefillText = "") {
       const win = document.getElementById("chatWindow");
@@ -807,9 +782,17 @@
         const res = await fetch(CHAT_API, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message: msg })
+          body: JSON.stringify({
+            message: msg,
+            excludeIds: chatSuggestedHistory
+          })
         });
         const data = await res.json();
+
+        if (data.suggestedRecipeId && !chatSuggestedHistory.includes(data.suggestedRecipeId)) {
+          chatSuggestedHistory.push(data.suggestedRecipeId);
+          if (chatSuggestedHistory.length > 6) chatSuggestedHistory.shift();
+        }
 
         const actionBtn = data.suggestedRecipeId
           ? `<button onclick="openRecipeDetail('${data.suggestedRecipeId}')" class="mt-2 w-full bg-red-50 hover:bg-red-100 text-[#cf2127] border border-red-200 font-bold py-1.5 px-2 rounded text-[11px] text-center">
