@@ -2,7 +2,7 @@
 Bep Thong Minh - AWS Lambda API (Teaching & Cooking Assistant)
 Runtime: Python 3.12
 Handler: lambda_function.lambda_handler
-DynamoDB table: MealRecipesTable (partition key RecipeID, String)
+DynamoDB table: RecipesTable (partition key RecipeID, String)
 Integrations: Amazon DynamoDB, Amazon Location Service (geo-places v2), Amazon Bedrock
 Supports API Gateway REST API v1 and HTTP API v2 events.
 """
@@ -13,8 +13,10 @@ import math
 import os
 import random
 import unicodedata
+import urllib.error
+import urllib.request
 from decimal import Decimal
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, quote
 
 import boto3
 from botocore.exceptions import ClientError
@@ -23,8 +25,10 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 REGION = os.environ.get("AWS_REGION", "ap-southeast-1")
-TABLE_NAME = os.environ.get("DYNAMODB_TABLE", "MealRecipesTable")
-BEDROCK_MODEL_ID = os.environ.get("BEDROCK_MODEL_ID", "amazon.nova-micro-v1:0")
+BEDROCK_REGION = os.environ.get("BEDROCK_REGION", REGION).strip()
+TABLE_NAME = os.environ.get("DYNAMODB_TABLE", "RecipesTable").strip()
+BEDROCK_MODEL_ID = os.environ.get("BEDROCK_MODEL_ID", "apac.amazon.nova-micro-v1:0").strip()
+BEDROCK_API_KEY = os.environ.get("BEDROCK_API_KEY", "").strip()
 
 MAX_INPUT_LENGTH = 200
 MAX_KEYWORDS = 10
@@ -32,7 +36,7 @@ MAX_KEYWORDS = 10
 dynamodb = boto3.resource("dynamodb", region_name=REGION)
 table = dynamodb.Table(TABLE_NAME)
 geo_places_client = boto3.client("geo-places", region_name=REGION)
-bedrock_client = boto3.client("bedrock-runtime", region_name=REGION)
+bedrock_client = boto3.client("bedrock-runtime", region_name=BEDROCK_REGION)
 
 CORS_HEADERS = {
     "Access-Control-Allow-Origin": "*",
@@ -194,8 +198,11 @@ def handle_nearby_stores(params):
         raise ValueError("Địa chỉ tìm kiếm tối đa 200 ký tự.")
 
     if address:
+        bias_lng = float(params.get("lng", 106.7009))
+        bias_lat = float(params.get("lat", 10.7769))
         geocode = geo_places_client.search_text(
-            QueryText=address,
+            QueryText=f"{address}, Việt Nam",
+            BiasPosition=[bias_lng, bias_lat],
             MaxResults=1,
             Language="vi",
             Filter={
@@ -226,15 +233,12 @@ def handle_nearby_stores(params):
     }
     advice = tier_config.get(tier, tier_config["mid"])
 
-    # Chỉ giữ cửa hàng/chợ bán thực phẩm tổng hợp; loại cửa hàng chuyên biệt,
-    # quán ăn và chuỗi tiện lợi không phù hợp để mua nguyên liệu nấu ăn.
     excluded_name_terms = (
         "famima", "familymart", "family mart", "circle k", "gs25",
         "7-eleven", "ministop", "cheers", "shop&go", "shop and go", "fumart",
         "trai cay", "rau cu", "cua hang rau", "cua hang thit",
         "hai san", "ca tuoi", "me va be", "baby", "kids",
         "chao dinh duong", "mon ngon", "nha hang", "quan an",
-        # Cửa hàng chuyên mặt hàng, không phải điểm mua thực phẩm tổng hợp.
         "dien may", "cua hang gao", "dai ly gao", "vua gao",
         "luong thuc", "rau sach", "vegetables", "fruits",
         "fruit garden", "nong san", "vinamilk", "nonglam milk",
@@ -245,11 +249,6 @@ def handle_nearby_stores(params):
         "bar", "pub", "gas station", "pet store", "clothing",
         "hotel", "lodging", "shopping mall", "shopping center",
     )
-    # So khớp category theo tên loại hình hoàn chỉnh, tránh bắt nhầm chỉ vì
-    # category có chứa một từ chung như "market" hoặc "food".
-    # Category từ nhà cung cấp đang gắn nhãn "sieu thi" sai cho cả GS25,
-    # cửa hàng trái cây và đại lý gạo. Vì vậy chỉ nhận diện bằng tên loại hình/
-    # thương hiệu rõ ràng; không nhận POI chỉ vì category.
     grocery_name_terms = (
         "bach hoa xanh", "winmart", "win mart", "coop food", "co.op food",
         "coopmart", "co.opmart", "kingfood", "tops market", "lotte mart",
@@ -264,10 +263,8 @@ def handle_nearby_stores(params):
         page_count = 0
         max_pages = 5
 
-        # SearchNearby tìm POI theo tọa độ và bán kính, không phụ thuộc một
-        # danh sách từ khóa; phân trang để lấy nhiều kết quả hơn 100 POI đầu.
         while page_count < max_pages:
-            request = {
+            request_payload = {
                 "QueryPosition": [lng, lat],
                 "QueryRadius": 10000,
                 "Filter": {"IncludeCountries": ["VNM"]},
@@ -275,14 +272,12 @@ def handle_nearby_stores(params):
                 "Language": "vi",
             }
             if next_token:
-                request["NextToken"] = next_token
+                request_payload["NextToken"] = next_token
 
-            result = geo_places_client.search_nearby(**request)
+            result = geo_places_client.search_nearby(**request_payload)
             page_count += 1
 
             for item in result.get("ResultItems", []):
-                # Ghi log POI thô để xác định vì sao khu vực này không có kết quả.
-                # Chỉ dùng trong CloudWatch, không đưa dữ liệu debug ra giao diện.
                 categories = item.get("Categories") or []
                 category_names = [
                     normalize(category.get("LocalizedName") or category.get("Name") or "")
@@ -304,7 +299,6 @@ def handle_nearby_stores(params):
                     logger.info("Nearby POI rejected by name filter: %r", title)
                     continue
 
-                # Loại chắc chắn nhà hàng/quán ăn và các nhóm không liên quan.
                 if any(
                     excluded in category
                     for category in category_names
@@ -314,10 +308,6 @@ def handle_nearby_stores(params):
                     continue
 
                 has_grocery_name = any(term in title_norm for term in grocery_name_terms)
-
-                # Category không được dùng làm điều kiện chấp nhận vì dữ liệu
-                # Amazon Location có nhiều nhãn sai. Tên phải thể hiện rõ
-                # siêu thị/chợ/tạp hóa/cửa hàng thực phẩm hoặc chuỗi đã biết.
                 if not has_grocery_name:
                     logger.info("Nearby POI rejected: not recognized as general grocery: %r categories=%s", title, category_names)
                     continue
@@ -355,8 +345,6 @@ def handle_nearby_stores(params):
                     "businessChains": chain_names,
                 }
 
-                # Gộp các bản ghi cùng chuỗi tại cùng địa chỉ (ví dụ Co.opmart
-                # có nhiều POI cổng chính/cổng phụ); chi nhánh ở địa chỉ khác vẫn riêng.
                 address_key = normalize(addr_label)
                 normalized_title = normalize(title)
                 known_brands = (
@@ -381,9 +369,6 @@ def handle_nearby_stores(params):
                 max_pages, lat, lng
             )
 
-        # SearchNearby đôi khi không trả POI ở một số khu vực. Nếu hoàn toàn
-        # không có cửa hàng sau bước này, thử tìm theo loại cửa hàng bằng SearchText
-        # và giới hạn trong vòng tròn 10 km quanh tọa độ người dùng.
         if not stores_by_key:
             fallback_queries = (
                 "siêu thị", "chợ", "cửa hàng thực phẩm",
@@ -407,16 +392,6 @@ def handle_nearby_stores(params):
 
                     for item in text_result.get("ResultItems", []):
                         title = (item.get("Title") or "").strip()
-                        raw_categories = item.get("Categories") or []
-                        raw_category_names = [
-                            normalize(category.get("LocalizedName") or category.get("Name") or "")
-                            for category in raw_categories
-                        ]
-                        logger.info(
-                            "SearchText POI raw: title=%r place_type=%r categories=%s position=%s place_id=%r",
-                            title, item.get("PlaceType"), raw_category_names,
-                            item.get("Position"), item.get("PlaceId")
-                        )
                         if not title:
                             continue
                         title_norm = normalize(title)
@@ -487,13 +462,9 @@ def handle_nearby_stores(params):
                 except Exception:
                     logger.exception("SearchText fallback failed for query=%r", search_term)
 
-        # Phân nhóm cố định theo loại hình cửa hàng. Đây là mức ngân sách tham khảo,
-        # không phải giá bán hay tồn kho thực tế của từng chi nhánh.
         def budget_group(store):
             name = normalize(store.get("name", ""))
 
-            # WinMart+ và Bách Hóa Xanh thuộc nhóm tầm trung;
-            # WinMart (không có dấu +) thuộc nhóm siêu thị lớn.
             if (
                 "bach hoa xanh" in name
                 or "winmart+" in name
@@ -519,8 +490,6 @@ def handle_nearby_stores(params):
             if "cho " in name or "tap hoa" in name or "bach hoa" in name:
                 return "low", "Tiết kiệm (dưới 35.000đ)"
 
-            # Những cửa hàng thực phẩm tổng hợp không rõ quy mô được xếp tạm
-            # vào nhóm tầm trung, tránh tự nhận là siêu thị lớn.
             return "mid", "Tầm trung (35.000đ – 70.000đ)"
 
         stores = []
@@ -530,8 +499,6 @@ def handle_nearby_stores(params):
             store["budgetLabel"] = group_label
             stores.append(store)
 
-        # Chỉ trả về cửa hàng thuộc đúng mức ngân sách người dùng đã chọn.
-        # Không trộn cửa hàng của ba nhóm vào cùng một danh sách.
         if tier not in ("low", "mid", "high"):
             tier = "mid"
         selected_stores = [
@@ -584,6 +551,7 @@ def find_recipes_by_mood_weather(msg, items):
         or any(normalize(ing) in norm_msg for ing in (r.get("Ingredients") or []))
     ]
     if direct:
+        random.shuffle(direct)
         return direct
 
     scored = []
@@ -600,7 +568,14 @@ def find_recipes_by_mood_weather(msg, items):
             scored.append((score, r))
 
     scored.sort(key=lambda x: x[0], reverse=True)
-    return [r for _, r in scored]
+    if not scored:
+        return []
+
+    top_score = scored[0][0]
+    top_group = [r for score, r in scored if score >= max(1, top_score - 1)]
+    random.shuffle(top_group)
+    rest_group = [r for score, r in scored if score < max(1, top_score - 1)]
+    return top_group + rest_group
 
 
 def handle_chat(event):
@@ -612,13 +587,37 @@ def handle_chat(event):
         raise ValueError("Câu hỏi tối đa 500 ký tự.")
 
     items = get_all_recipes()
+    shuffled_items = list(items)
+    random.shuffle(shuffled_items)
+
+    exclude_ids = set(payload.get("excludeIds") or [])
+
+    matched_recipes = find_recipes_by_mood_weather(user_message, items)
+    fresh_matches = [r for r in matched_recipes if r.get("RecipeID") not in exclude_ids]
+    candidate_recipes = fresh_matches if fresh_matches else matched_recipes
+
+    suggested_id = candidate_recipes[0].get("RecipeID") if candidate_recipes else None
+    suggested_name = candidate_recipes[0].get("Name") if candidate_recipes else None
+
     menu_context = "\n".join([
         f"- [{r.get('RecipeID')}] {r.get('Name')}: loại {r.get('Category')}, "
         f"tâm trạng phù hợp: {', '.join(r.get('MoodTags') or [])}, "
         f"chi phí ~{r.get('EstimatedCostVND')}đ, nấu {r.get('TotalTimeMinutes') or r.get('CookingTimeMinutes', 20)} phút, "
         f"nguyên liệu: {', '.join(r.get('Ingredients') or [])}"
-        for r in items
+        for r in shuffled_items
     ])
+
+    avoid_note = ""
+    if exclude_ids:
+        avoid_names = [r.get("Name") for r in items if r.get("RecipeID") in exclude_ids]
+        if avoid_names:
+            avoid_note = f"\n4. KHÔNG gợi ý lại các món người dùng vừa xem ở lượt trước: {', '.join(avoid_names)}. Hãy chọn món khác trong danh sách."
+
+    primary_hint = (
+        f"2. Gợi ý món **{suggested_name}** (hoặc 1–2 món phù hợp khác TỪ DANH SÁCH BÊN DƯỚI, ghi rõ tên món chính xác, chi phí và thời gian nấu), giải thích ngắn gọn vì sao món đó hợp với tâm trạng/thời tiết hiện tại.\n"
+        if suggested_name
+        else "2. Gợi ý 1–2 món phù hợp nhất TỪ DANH SÁCH BÊN DƯỚI (ghi rõ tên món chính xác, chi phí và thời gian nấu), giải thích ngắn gọn vì sao món đó hợp với tâm trạng/thời tiết hiện tại.\n"
+    )
 
     system_prompt = (
         "Bạn là Đầu Bếp AI Tâm Lý trên website hướng dẫn dạy nấu ăn Việt Nam. "
@@ -626,23 +625,41 @@ def handle_chat(event):
         "THỜI TIẾT (trời mưa, trời lạnh, nắng nóng, oi bức), ngân sách hoặc nguyên liệu sẵn có.\n"
         "Quy tắc trả lời:\n"
         "1. Đồng cảm nhẹ nhàng với tâm trạng hoặc thời tiết của người dùng (1 câu ngắn).\n"
-        "2. Gợi ý 1–2 món phù hợp nhất TỪ DANH SÁCH BÊN DƯỚI (ghi rõ tên món chính xác, chi phí và thời gian nấu), giải thích ngắn gọn vì sao món đó hợp với tâm trạng/thời tiết hiện tại.\n"
-        "3. Khích lệ người dùng bấm nút xem hướng dẫn từng bước bên dưới.\n"
-        "Trả lời bằng tiếng Việt tự nhiên, ấm áp, ngắn gọn (tối đa 5 câu).\n\n"
+        f"{primary_hint}"
+        "3. Khích lệ người dùng bấm nút xem hướng dẫn từng bước bên dưới."
+        f"{avoid_note}\n"
+        "Trả lời bằng tiếng Việt tự nhiên, ấm áp, đa dạng cách diễn đạt, ngắn gọn (tối đa 5 câu).\n\n"
         f"Danh sách công thức hiện có:\n{menu_context}"
     )
 
-    matched_recipes = find_recipes_by_mood_weather(user_message, items)
-    suggested_id = matched_recipes[0].get("RecipeID") if matched_recipes else None
-    suggested_name = matched_recipes[0].get("Name") if matched_recipes else None
-
     try:
-        res = bedrock_client.converse(
-            modelId=BEDROCK_MODEL_ID,
-            messages=[{"role": "user", "content": [{"text": user_message}]}],
-            system=[{"text": system_prompt}],
-            inferenceConfig={"maxTokens": 450, "temperature": 0.7},
-        )
+        if BEDROCK_API_KEY:
+            encoded_model = quote(BEDROCK_MODEL_ID, safe="")
+            endpoint = f"https://bedrock-runtime.{BEDROCK_REGION}.amazonaws.com/model/{encoded_model}/converse"
+            req_body = json.dumps({
+                "messages": [{"role": "user", "content": [{"text": user_message}]}],
+                "system": [{"text": system_prompt}],
+                "inferenceConfig": {"maxTokens": 450, "temperature": 0.9},
+            }).encode("utf-8")
+            req = urllib.request.Request(
+                endpoint,
+                data=req_body,
+                headers={
+                    "Authorization": f"Bearer {BEDROCK_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                res = json.loads(resp.read().decode("utf-8"))
+        else:
+            res = bedrock_client.converse(
+                modelId=BEDROCK_MODEL_ID,
+                messages=[{"role": "user", "content": [{"text": user_message}]}],
+                system=[{"text": system_prompt}],
+                inferenceConfig={"maxTokens": 450, "temperature": 0.9},
+            )
+
         reply_text = res["output"]["message"]["content"][0]["text"]
         return response(200, {
             "reply": reply_text,
@@ -650,29 +667,33 @@ def handle_chat(event):
             "suggestedRecipeName": suggested_name,
             "source": "amazon-bedrock",
         })
+    except urllib.error.HTTPError as http_exc:
+        err_detail = http_exc.read().decode("utf-8", errors="ignore")
+        logger.warning("Amazon Bedrock HTTP %s: %s", http_exc.code, err_detail)
     except Exception as exc:
         logger.warning("Amazon Bedrock fallback triggered: %s", exc)
-        if matched_recipes:
-            top = matched_recipes[0]
-            second = matched_recipes[1] if len(matched_recipes) > 1 else None
-            extra = f" hoặc <strong>{second.get('Name')}</strong> (~{second.get('EstimatedCostVND')}đ)" if second else ""
-            reply = (
-                f"Với thời tiết và tâm trạng hiện tại của bạn, một bữa ăn tự nấu sẽ giúp tinh thần dễ chịu hơn nhiều! "
-                f"Mình gợi ý món <strong>{top.get('Name')}</strong> (~{top.get('EstimatedCostVND')}đ, "
-                f"{top.get('TotalTimeMinutes') or top.get('CookingTimeMinutes', 20)} phút){extra}. "
-                f"Bạn bấm vào nút bên dưới để xem hướng dẫn chi tiết từng bước nhé!"
-            )
-        else:
-            reply = (
-                "Dù tâm trạng hay thời tiết hôm nay thế nào, tự vào bếp nấu một món ngon cũng giúp thư giãn rất tốt! "
-                "Bạn hãy cho mình biết bạn đang thích ăn món nóng hổi (canh/kho) hay món thanh mát (salad/xào) để mình chọn công thức chuẩn nhất nhé."
-            )
-        return response(200, {
-            "reply": reply,
-            "suggestedRecipeId": suggested_id,
-            "suggestedRecipeName": suggested_name,
-            "source": "fallback",
-        })
+
+    if candidate_recipes:
+        top = candidate_recipes[0]
+        second = candidate_recipes[1] if len(candidate_recipes) > 1 else None
+        extra = f" hoặc <strong>{second.get('Name')}</strong> (~{second.get('EstimatedCostVND')}đ)" if second else ""
+        reply = (
+            f"Với thời tiết và tâm trạng hiện tại của bạn, một bữa ăn tự nấu sẽ giúp tinh thần dễ chịu hơn nhiều! "
+            f"Mình gợi ý món <strong>{top.get('Name')}</strong> (~{top.get('EstimatedCostVND')}đ, "
+            f"{top.get('TotalTimeMinutes') or top.get('CookingTimeMinutes', 20)} phút){extra}. "
+            f"Bạn bấm vào nút bên dưới để xem hướng dẫn chi tiết từng bước nhé!"
+        )
+    else:
+        reply = (
+            "Dù tâm trạng hay thời tiết hôm nay thế nào, tự vào bếp nấu một món ngon cũng giúp thư giãn rất tốt! "
+            "Bạn hãy cho mình biết bạn đang thích ăn món nóng hổi (canh/kho) hay món thanh mát (salad/xào) để mình chọn công thức chuẩn nhất nhé."
+        )
+    return response(200, {
+        "reply": reply,
+        "suggestedRecipeId": suggested_id,
+        "suggestedRecipeName": suggested_name,
+        "source": "fallback",
+    })
 
 
 # 3. TÌM KIẾM CÔNG THỨC NẤU ĂN TỪ DYNAMODB
@@ -763,7 +784,7 @@ def lambda_handler(event, context):
         return response(400, {"error": str(exc)})
     except ClientError:
         logger.exception("AWS service request failed")
-        return response(500, {"error": "Không truy cập được dịch vụ AWS. Kiểm tra tên bảng MealRecipesTable và IAM Role."})
+        return response(500, {"error": f"Không truy cập được dịch vụ AWS. Kiểm tra tên bảng {TABLE_NAME} và IAM Role."})
     except Exception:
         logger.exception("Unhandled Lambda error")
         return response(500, {"error": "Lỗi nội bộ. Xem CloudWatch Logs để biết chi tiết."})
