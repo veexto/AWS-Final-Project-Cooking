@@ -186,145 +186,141 @@ def haversine_meters(lat1, lon1, lat2, lon2):
     return int(2 * r * math.atan2(math.sqrt(a), math.sqrt(1 - a)))
 
 
-# 1. TÌM CỬA HÀNG THỰC PHẨM GẦN VỊ TRÍ (AMAZON LOCATION GEO-PLACES V2)
 def handle_nearby_stores(params):
     ingredients = (params.get("ingredients") or "thực phẩm tươi").strip()
     if len(ingredients) > MAX_INPUT_LENGTH:
         raise ValueError(f"Tham số ingredients vượt quá {MAX_INPUT_LENGTH} ký tự.")
+
     tier = (params.get("tier") or "mid").strip().lower()
+    if tier not in ("low", "mid", "high"):
+        tier = "mid"
 
     address = (params.get("address") or "").strip()
     if len(address) > 200:
         raise ValueError("Địa chỉ tìm kiếm tối đa 200 ký tự.")
 
-    if address:
-        bias_lng = float(params.get("lng", 106.7009))
-        bias_lat = float(params.get("lat", 10.7769))
-        geocode = geo_places_client.search_text(
-            QueryText=f"{address}, Việt Nam",
-            BiasPosition=[bias_lng, bias_lat],
-            MaxResults=1,
-            Language="vi",
-            Filter={
-                "BoundingBox": [102.0, 8.0, 110.0, 24.0],
-                "IncludeCountries": ["VNM"]
-            }
-        )
-        address_results = geocode.get("ResultItems", [])
-        if not address_results or not address_results[0].get("Position"):
-            return response(200, {
-                "source": "amazon-location-geo-places",
-                "advice": "Không tìm thấy địa chỉ này. Hãy thử nhập địa chỉ cụ thể hơn hoặc dùng GPS.",
-                "stores": [],
-            })
-        address_position = address_results[0]["Position"]
-        lng, lat = float(address_position[0]), float(address_position[1])
-    else:
-        try:
-            lat = float(params.get("lat", 10.7769))
-            lng = float(params.get("lng", 106.7009))
-        except (TypeError, ValueError):
-            lat, lng = 10.7769, 106.7009
+    try:
+        lat = float(params.get("lat", 10.7769))
+        lng = float(params.get("lng", 106.7009))
+    except (TypeError, ValueError):
+        lat, lng = 10.7769, 106.7009
 
     tier_config = {
-        "low": "Ngân sách tiết kiệm (< 35.000đ): Ưu tiên chợ truyền thống và siêu thị bình dân gần bạn.",
-        "mid": "Ngân sách vừa phải (35.000đ – 70.000đ): Ưu tiên chợ, siêu thị và cửa hàng thực phẩm tổng hợp.",
-        "high": "Ngân sách thoải mái (> 70.000đ): Ưu tiên siêu thị và cửa hàng thực phẩm tổng hợp có nhiều lựa chọn.",
+        "low": "Ngân sách tiết kiệm (< 35.000đ): Ưu tiên chợ truyền thống và cửa hàng tạp hóa gần bạn.",
+        "mid": "Ngân sách vừa phải (35.000đ – 70.000đ): Ưu tiên Bách Hóa Xanh, WinMart+, Co.op Food, Satrafood.",
+        "high": "Ngân sách thoải mái (> 70.000đ): Ưu tiên siêu thị lớn (Co.opmart, WinMart, Lotte Mart, GO!, Tops Market).",
     }
-    advice = tier_config.get(tier, tier_config["mid"])
+    advice = tier_config[tier]
+    resolved_address = ""
+
+    if address:
+        query_addr = (
+            address
+            if ("viet nam" in normalize(address) or "vietnam" in normalize(address))
+            else f"{address}, Việt Nam"
+        )
+        geo_items = []
+        try:
+            geo_res = geo_places_client.geocode(
+                QueryText=query_addr,
+                BiasPosition=[lng, lat],
+                MaxResults=1,
+                Language="vi",
+                Filter={"IncludeCountries": ["VNM"]},
+            )
+            geo_items = geo_res.get("ResultItems", [])
+        except Exception:
+            logger.exception("Geocode failed for address=%r, trying search_text", query_addr)
+
+        if not geo_items:
+            try:
+                st_res = geo_places_client.search_text(
+                    QueryText=query_addr,
+                    BiasPosition=[lng, lat],
+                    MaxResults=1,
+                    Language="vi",
+                    Filter={"IncludeCountries": ["VNM"]},
+                )
+                geo_items = st_res.get("ResultItems", [])
+            except Exception:
+                logger.exception("SearchText address lookup failed for address=%r", query_addr)
+
+        if not geo_items or not geo_items[0].get("Position"):
+            return response(200, {
+                "source": "amazon-location-geo-places",
+                "advice": f"Không tìm thấy tọa độ cho địa chỉ '{address}'. Hãy thử ghi rõ tên đường, phường/quận, thành phố.",
+                "selectedTier": tier,
+                "origin": {"lat": lat, "lng": lng},
+                "stores": [],
+            })
+
+        pos = geo_items[0]["Position"]
+        lng, lat = float(pos[0]), float(pos[1])
+        resolved_address = (geo_items[0].get("Address") or {}).get("Label") or geo_items[0].get("Title") or address
+        logger.info("Resolved manual address=%r -> (%s, %s) [%s]", address, lat, lng, resolved_address)
 
     excluded_name_terms = (
         "famima", "familymart", "family mart", "circle k", "gs25",
         "7-eleven", "ministop", "cheers", "shop&go", "shop and go", "fumart",
-        "trai cay", "rau cu", "cua hang rau", "cua hang thit",
-        "hai san", "ca tuoi", "me va be", "baby", "kids",
-        "chao dinh duong", "mon ngon", "nha hang", "quan an",
-        "dien may", "cua hang gao", "dai ly gao", "vua gao",
-        "luong thuc", "rau sach", "vegetables", "fruits",
-        "fruit garden", "nong san", "vinamilk", "nonglam milk",
-        "ba huan", "trung sach", "farmbox",
+        "nha hang", "quan an", "cafe", "coffee", "tra sua", "spa", "hotel",
+        "dien may", "me va be", "baby", "kids", "pet", "thuoc", "pharmacy",
     )
     excluded_category_terms = (
         "restaurant", "cafe", "coffee", "fast food", "food court",
         "bar", "pub", "gas station", "pet store", "clothing",
-        "hotel", "lodging", "shopping mall", "shopping center",
+        "hotel", "lodging",
     )
-    grocery_name_terms = (
-        "bach hoa xanh", "winmart", "win mart", "coop food", "co.op food",
-        "coopmart", "co.opmart", "kingfood", "tops market", "lotte mart",
-        "mega market", "go market", "emart", "satrafood",
-        "food mart", "food store", "cua hang thuc pham",
-        "tap hoa", "bach hoa", "sieu thi", "cho ",
-    )
+
+    queries_by_tier = {
+        "low": ["chợ", "cửa hàng tạp hóa", "bách hóa"],
+        "mid": ["Bách Hóa Xanh", "WinMart+", "Co.op Food", "Satrafood", "cửa hàng thực phẩm"],
+        "high": ["Co.opmart", "WinMart", "Lotte Mart", "GO!", "Tops Market", "Emart", "Kingfoodmart", "siêu thị"],
+    }
 
     try:
         stores_by_key = {}
-        next_token = None
-        page_count = 0
-        max_pages = 5
+        for search_term in queries_by_tier[tier]:
+            try:
+                text_result = geo_places_client.search_text(
+                    QueryText=search_term,
+                    BiasPosition=[lng, lat],
+                    MaxResults=15,
+                    Filter={"IncludeCountries": ["VNM"]},
+                    Language="vi",
+                )
+            except Exception:
+                logger.exception("SearchText failed for query=%r", search_term)
+                continue
 
-        while page_count < max_pages:
-            request_payload = {
-                "QueryPosition": [lng, lat],
-                "QueryRadius": 10000,
-                "Filter": {"IncludeCountries": ["VNM"]},
-                "MaxResults": 100,
-                "Language": "vi",
-            }
-            if next_token:
-                request_payload["NextToken"] = next_token
+            for item in text_result.get("ResultItems", []):
+                title = (item.get("Title") or "").strip()
+                if not title:
+                    continue
+                title_norm = normalize(title)
+                if any(term in title_norm for term in excluded_name_terms):
+                    continue
 
-            result = geo_places_client.search_nearby(**request_payload)
-            page_count += 1
-
-            for item in result.get("ResultItems", []):
                 categories = item.get("Categories") or []
                 category_names = [
                     normalize(category.get("LocalizedName") or category.get("Name") or "")
                     for category in categories
                 ]
-                title = (item.get("Title") or "").strip()
-                logger.info(
-                    "Nearby POI raw: title=%r place_type=%r categories=%s",
-                    title, item.get("PlaceType"), category_names
-                )
-
-                if item.get("PlaceType") != "PointOfInterest":
-                    continue
-
-                if not title:
-                    continue
-                title_norm = normalize(title)
-                if any(term in title_norm for term in excluded_name_terms):
-                    logger.info("Nearby POI rejected by name filter: %r", title)
-                    continue
-
                 if any(
                     excluded in category
                     for category in category_names
                     for excluded in excluded_category_terms
                 ):
-                    logger.info("Nearby POI rejected by excluded category: %r categories=%s", title, category_names)
-                    continue
-
-                has_grocery_name = any(term in title_norm for term in grocery_name_terms)
-                if not has_grocery_name:
-                    logger.info("Nearby POI rejected: not recognized as general grocery: %r categories=%s", title, category_names)
                     continue
 
                 pos = item.get("Position")
                 if not pos or len(pos) < 2:
                     continue
-
                 store_lat, store_lng = float(pos[1]), float(pos[0])
                 dist_m = haversine_meters(lat, lng, store_lat, store_lng)
                 if dist_m > 10000:
                     continue
 
-                addr_label = (item.get("Address") or {}).get("Label") or ""
-                if not addr_label:
-                    continue
-
+                addr_label = (item.get("Address") or {}).get("Label") or "Gần vị trí đã chọn"
                 chain_names = [
                     chain.get("Name", "")
                     for chain in (item.get("BusinessChains") or [])
@@ -335,7 +331,12 @@ def handle_nearby_stores(params):
                     for category in categories
                     if category.get("LocalizedName") or category.get("Name")
                 )
-                store = {
+
+                dedup_key = (title_norm, round(store_lat, 4), round(store_lng, 4))
+                if dedup_key in stores_by_key:
+                    continue
+
+                stores_by_key[dedup_key] = {
                     "name": title,
                     "address": addr_label,
                     "distanceMeters": dist_m,
@@ -343,193 +344,31 @@ def handle_nearby_stores(params):
                     "lng": store_lng,
                     "category": category_label,
                     "businessChains": chain_names,
+                    "budgetGroup": tier,
                 }
 
-                address_key = normalize(addr_label)
-                normalized_title = normalize(title)
-                known_brands = (
-                    "coopmart", "coop food", "winmart", "bach hoa xanh",
-                    "kingfoodmart", "tops market", "lotte mart", "mega market",
-                    "emart", "satrafood",
-                )
-                brand_key = next((brand for brand in known_brands if brand in normalized_title), None)
-                place_id = item.get("PlaceId")
-                key = (brand_key, address_key) if brand_key else (
-                    place_id or (normalized_title, address_key)
-                )
-                stores_by_key[key] = store
+        selected_stores = sorted(stores_by_key.values(), key=lambda x: x["distanceMeters"])
 
-            next_token = result.get("NextToken")
-            if not next_token:
-                break
-
-        if next_token:
-            logger.warning(
-                "SearchNearby reached page limit (%s); more results may exist. location=(%s,%s)",
-                max_pages, lat, lng
-            )
-
-        if not stores_by_key:
-            fallback_queries = (
-                "siêu thị", "chợ", "cửa hàng thực phẩm",
-                "supermarket", "grocery store", "food market",
-            )
-            for search_term in fallback_queries:
-                try:
-                    text_result = geo_places_client.search_text(
-                        QueryText=search_term,
-                        MaxResults=100,
-                        Filter={
-                            "Circle": {"Center": [lng, lat], "Radius": 10000},
-                            "IncludeCountries": ["VNM"],
-                        },
-                        Language="vi",
-                    )
-                    logger.info(
-                        "SearchText fallback query=%r raw_results=%s",
-                        search_term, len(text_result.get("ResultItems", []))
-                    )
-
-                    for item in text_result.get("ResultItems", []):
-                        title = (item.get("Title") or "").strip()
-                        if not title:
-                            continue
-                        title_norm = normalize(title)
-                        if any(term in title_norm for term in excluded_name_terms):
-                            continue
-
-                        categories = item.get("Categories") or []
-                        category_names = [
-                            normalize(category.get("LocalizedName") or category.get("Name") or "")
-                            for category in categories
-                        ]
-                        if any(
-                            excluded in category
-                            for category in category_names
-                            for excluded in excluded_category_terms
-                        ):
-                            continue
-
-                        has_grocery_name = any(
-                            term in title_norm for term in grocery_name_terms
-                        )
-                        if not has_grocery_name:
-                            continue
-
-                        pos = item.get("Position")
-                        if not pos or len(pos) < 2:
-                            continue
-                        store_lat, store_lng = float(pos[1]), float(pos[0])
-                        dist_m = haversine_meters(lat, lng, store_lat, store_lng)
-                        if dist_m > 10000:
-                            continue
-
-                        addr_label = (item.get("Address") or {}).get("Label") or ""
-                        if not addr_label:
-                            continue
-                        chain_names = [
-                            chain.get("Name", "")
-                            for chain in (item.get("BusinessChains") or [])
-                            if chain.get("Name")
-                        ]
-                        category_label = ", ".join(
-                            category.get("LocalizedName") or category.get("Name", "")
-                            for category in categories
-                            if category.get("LocalizedName") or category.get("Name")
-                        )
-                        store = {
-                            "name": title,
-                            "address": addr_label,
-                            "distanceMeters": dist_m,
-                            "lat": store_lat,
-                            "lng": store_lng,
-                            "category": category_label,
-                            "businessChains": chain_names,
-                        }
-                        address_key = normalize(addr_label)
-                        normalized_title = normalize(title)
-                        known_brands = (
-                            "coopmart", "coop food", "winmart", "bach hoa xanh",
-                            "kingfoodmart", "tops market", "lotte mart", "mega market",
-                            "emart", "satrafood",
-                        )
-                        brand_key = next((brand for brand in known_brands if brand in normalized_title), None)
-                        place_id = item.get("PlaceId")
-                        key = (brand_key, address_key) if brand_key else (
-                            place_id or (normalized_title, address_key)
-                        )
-                        stores_by_key[key] = store
-                except Exception:
-                    logger.exception("SearchText fallback failed for query=%r", search_term)
-
-        def budget_group(store):
-            name = normalize(store.get("name", ""))
-
-            if (
-                "bach hoa xanh" in name
-                or "winmart+" in name
-                or "win mart+" in name
-                or "coop food" in name
-                or "co.op food" in name
-                or "satrafood" in name
-                or "cua hang thuc pham" in name
-            ):
-                return "mid", "Tầm trung (35.000đ – 70.000đ)"
-
-            if (
-                "coopmart" in name or "co.opmart" in name
-                or ("winmart" in name and "+" not in name)
-                or ("win mart" in name and "+" not in name)
-                or "kingfood" in name or "tops market" in name
-                or "lotte mart" in name or "mega market" in name
-                or "emart" in name or "go market" in name
-                or "sieu thi" in name
-            ):
-                return "high", "Siêu thị lớn (trên 70.000đ)"
-
-            if "cho " in name or "tap hoa" in name or "bach hoa" in name:
-                return "low", "Tiết kiệm (dưới 35.000đ)"
-
-            return "mid", "Tầm trung (35.000đ – 70.000đ)"
-
-        stores = []
-        for store in stores_by_key.values():
-            group_key, group_label = budget_group(store)
-            store["budgetGroup"] = group_key
-            store["budgetLabel"] = group_label
-            stores.append(store)
-
-        if tier not in ("low", "mid", "high"):
-            tier = "mid"
-        selected_stores = [
-            store for store in stores
-            if store["budgetGroup"] == tier
-        ]
-        selected_stores.sort(key=lambda item: item["distanceMeters"])
-
-        logger.info(
-            "SearchNearby pages=%s stores_found=%s stores_selected=%s tier=%s location=(%s,%s)",
-            page_count, len(stores), len(selected_stores), tier, lat, lng
-        )
         return response(200, {
-            "source": "amazon-location-search-nearby",
+            "source": "amazon-location-geo-places",
             "advice": advice,
+            "resolvedAddress": resolved_address,
             "selectedTier": tier,
             "origin": {"lat": lat, "lng": lng},
             "searchRadiusMeters": 10000,
-            "stores": selected_stores[:30],
+            "stores": selected_stores[:20],
         })
     except Exception:
-        logger.exception("Amazon Location SearchNearby failed")
+        logger.exception("Amazon Location nearby stores failed")
         return response(200, {
             "source": "fallback",
             "advice": advice,
+            "resolvedAddress": resolved_address,
             "origin": {"lat": lat, "lng": lng},
             "stores": [],
         })
 
 
-# 2. CHATBOT ĐẦU BẾP AI TÂM LÝ THEO TÂM TRẠNG & THỜI TIẾT (AMAZON BEDROCK)
 def find_recipes_by_mood_weather(msg, items):
     norm_msg = normalize(msg)
     target_moods = []
@@ -696,7 +535,6 @@ def handle_chat(event):
     })
 
 
-# 3. TÌM KIẾM CÔNG THỨC NẤU ĂN TỪ DYNAMODB
 def handle_recipe_search(params, context):
     filters = {
         "ingredients": csv_values(params.get("ingredients", ""), "ingredients"),
