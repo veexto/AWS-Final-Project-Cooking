@@ -1,0 +1,833 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bếp Thông Minh — Nền tảng hướng dẫn dạy nấu ăn & tìm nguyên liệu gần bạn</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background-color: #eeeeee; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; color: #333; }
+    .foody-red { color: #cf2127; }
+    .bg-foody-red { background-color: #cf2127; }
+    .bg-foody-red:hover { background-color: #b0191e; }
+    .sidebar-item { display: flex; align-items: center; justify-content: space-between; padding: 11px 14px; font-size: 14px; color: #444; border-bottom: 1px solid #f2f2f2; cursor: pointer; transition: all 0.15s; }
+    .sidebar-item:hover { background-color: #fafafa; color: #cf2127; }
+    .sidebar-item.active { color: #cf2127; font-weight: 700; background-color: #fff5f5; border-left: 3px solid #cf2127; }
+    .tab-btn { padding: 12px 16px; font-size: 14px; font-weight: 600; color: #666; border-bottom: 2px solid transparent; cursor: pointer; white-space: nowrap; }
+    .tab-btn:hover { color: #cf2127; }
+    .tab-btn.active { color: #cf2127; border-bottom-color: #cf2127; }
+    .foody-card { background: #fff; border-radius: 4px; overflow: hidden; border: 1px solid #e5e5e5; transition: transform 0.18s ease, box-shadow 0.18s ease; display: flex; flex-direction: column; }
+    .foody-card:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0,0,0,0.1); }
+    .line-clamp-1 { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+    .line-clamp-2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col">
+
+  <!-- TOP NAVBAR -->
+  <header class="sticky top-0 z-30 bg-white border-b border-gray-200 shadow-xs">
+    <div class="max-w-[1200px] mx-auto px-3 h-14 flex items-center gap-2 sm:gap-3">
+      <a href="#" onclick="resetAllFilters(); return false;" class="flex items-center gap-1.5 shrink-0 mr-1">
+        <span class="bg-foody-red text-white font-black text-lg px-2 py-0.5 rounded">B</span>
+        <span class="font-extrabold text-xl tracking-tight foody-red italic">BếpThôngMinh<span class="text-xs font-normal not-italic text-gray-500">.vn</span></span>
+      </a>
+
+      <!-- Nút định vị GPS -->
+      <button id="gpsBtn" onclick="detectLocation()" class="hidden md:flex items-center gap-1.5 border border-gray-300 rounded px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:border-gray-400 shrink-0" title="Lấy tọa độ GPS để tìm chợ/siêu thị gần nhất">
+        <span>📍</span>
+        <span id="locationLabel">TP.HCM</span>
+        <span class="text-[10px] text-gray-400">▼</span>
+      </button>
+
+      <!-- Nhãn chuyên mục Dạy nấu ăn -->
+      <span class="hidden sm:inline-flex items-center gap-1 border border-red-200 bg-red-50 text-[#cf2127] rounded px-2.5 py-1.5 text-xs font-bold shrink-0">
+        👨‍🍳 Học nấu ăn
+      </span>
+
+      <!-- Thanh tìm kiếm nguyên liệu hoặc tên món -->
+      <div class="flex-1 flex items-center border border-gray-300 rounded overflow-hidden bg-white focus-within:border-[#cf2127]">
+        <input id="searchInput" type="text" placeholder="Nhập nguyên liệu có sẵn (trứng, tôm, thịt bò, nấm...) hoặc tên món..." class="w-full px-3 py-1.5 text-sm outline-none" onkeydown="if(event.key==='Enter') executeSearch()">
+        <button onclick="openNearbyStoreModal()" class="hidden sm:flex items-center gap-1 px-2.5 py-1.5 text-xs text-gray-600 hover:bg-gray-100 border-l border-gray-200 shrink-0" title="Tìm nơi mua nguyên liệu gần vị trí & hợp túi tiền">
+          <span>🛒</span><span>Chỗ mua</span>
+        </button>
+        <button onclick="executeSearch()" class="bg-[#efefef] hover:bg-gray-200 px-3.5 py-1.5 text-gray-700 border-l border-gray-300 font-bold text-sm">
+          🔍
+        </button>
+      </div>
+
+      <!-- Nút mở Chatbot AI -->
+      <button onclick="toggleChatbot()" class="bg-foody-red text-white text-xs font-bold px-3 py-2 rounded flex items-center gap-1.5 shrink-0 shadow-xs">
+        <span>🤖</span><span class="hidden sm:inline">Đầu bếp AI</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- MAIN CONTAINER -->
+  <div class="max-w-[1200px] w-full mx-auto px-3 py-4 flex-1">
+    <div class="grid grid-cols-1 lg:grid-cols-[215px_1fr] gap-4 items-start">
+
+      <!-- LEFT SIDEBAR -->
+      <aside class="bg-white rounded border border-gray-200 overflow-hidden shadow-2xs">
+        <div class="px-3.5 py-3 border-b border-gray-200 flex items-center gap-2 bg-gray-50">
+          <span class="bg-foody-red text-white font-bold text-xs w-5 h-5 flex items-center justify-center rounded-xs">F</span>
+          <h2 class="font-bold text-sm text-gray-800">Khám phá bài học</h2>
+        </div>
+        <nav id="sidebarNav">
+          <div class="sidebar-item active" data-cat="all" onclick="selectSidebarCategory('all', this)">
+            <span>📚 Tất cả công thức</span><span class="text-gray-400 text-xs">›</span>
+          </div>
+          <div class="sidebar-item" data-cat="main" onclick="selectSidebarCategory('main', this)">
+            <span>🍖 Món chính mỗi ngày</span><span class="text-gray-400 text-xs">›</span>
+          </div>
+          <div class="sidebar-item" data-cat="soup" onclick="selectSidebarCategory('soup', this)">
+            <span>🍲 Các món canh thanh mát</span><span class="text-gray-400 text-xs">›</span>
+          </div>
+          <div class="sidebar-item" data-cat="side" onclick="selectSidebarCategory('side', this)">
+            <span>🥬 Món rau & món xào</span><span class="text-gray-400 text-xs">›</span>
+          </div>
+          <div class="sidebar-item" data-cat="salad" onclick="selectSidebarCategory('salad', this)">
+            <span>🥗 Gỏi & Salad thanh nhẹ</span><span class="text-gray-400 text-xs">›</span>
+          </div>
+          <div class="sidebar-item" data-cat="vegetarian" onclick="selectSidebarCategory('vegetarian', this)">
+            <span>🌱 Thực đơn món chay</span><span class="text-gray-400 text-xs">›</span>
+          </div>
+          <div class="sidebar-item" onclick="openNearbyStoreModal()">
+            <span>📍 Mua nguyên liệu gần tôi</span><span class="text-gray-400 text-xs">›</span>
+          </div>
+          <div class="sidebar-item" onclick="switchTab('saved')">
+            <span>🔖 Công thức đã lưu (<span id="savedCountSide">0</span>)</span><span class="text-gray-400 text-xs">›</span>
+          </div>
+          <div class="sidebar-item" onclick="toggleChatbot('Trời đang mưa se lạnh, nấu món gì ấm bụng?')">
+            <span>🌧️ Gợi ý theo tâm trạng/thời tiết</span><span class="text-gray-400 text-xs">›</span>
+          </div>
+        </nav>
+
+        <!-- Bộ lọc túi tiền nguyên liệu -->
+        <div class="p-3.5 border-t border-gray-200 bg-[#fafafa]">
+          <div class="flex justify-between items-center text-xs font-bold text-gray-700 mb-1.5">
+            <span>💰 Chi phí nguyên liệu</span>
+            <span id="sidebarBudgetLabel" class="foody-red">100.000đ</span>
+          </div>
+          <input id="budgetRange" type="range" min="15000" max="100000" step="5000" value="100000" oninput="updateBudgetFilter(this.value)" class="w-full accent-[#cf2127] cursor-pointer">
+          <div class="flex justify-between text-[11px] text-gray-400 mt-1">
+            <span>15k</span><span>50k</span><span>100k</span>
+          </div>
+        </div>
+      </aside>
+
+      <!-- RIGHT CONTENT AREA -->
+      <main class="min-w-0">
+        <!-- FILTER BAR -->
+        <div class="bg-white rounded border border-gray-200 px-3 flex flex-wrap items-center justify-between gap-2 mb-4 shadow-2xs">
+          <div class="flex items-center overflow-x-auto">
+            <button class="tab-btn active" data-tab="newest" onclick="switchTab('newest')">Tất cả (<span id="totalBadge">0</span>)</button>
+            <button class="tab-btn" data-tab="budget" onclick="switchTab('budget')">Tiết kiệm (&lt; 30k)</button>
+            <button class="tab-btn" data-tab="quick" onclick="switchTab('quick')">Nấu nhanh (&le; 20p)</button>
+            <button class="tab-btn" data-tab="saved" onclick="switchTab('saved')">Đã lưu</button>
+          </div>
+
+          <div class="flex items-center gap-2 py-2">
+            <select id="moodFilter" onchange="applyClientFilters()" class="border border-gray-300 rounded px-2.5 py-1 text-xs text-gray-600 bg-white outline-none">
+              <option value="all">- Tâm trạng / Thời tiết -</option>
+              <option value="comforting">Trời mưa lạnh / Cần ấm bụng</option>
+              <option value="fresh">Nắng nóng / Thanh mát</option>
+              <option value="energizing">Cần nạp năng lượng</option>
+              <option value="light">Nhẹ bụng / Dễ tiêu</option>
+            </select>
+
+            <select id="difficultyFilter" onchange="applyClientFilters()" class="border border-gray-300 rounded px-2.5 py-1 text-xs text-gray-600 bg-white outline-none">
+              <option value="all">- Cấp độ / Chế độ -</option>
+              <option value="easy">Người mới bắt đầu (Dễ)</option>
+              <option value="medium">Nâng cao (Trung bình)</option>
+              <option value="vegetarian">Món chay</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- BANNER TƯ VẤN ĐIỂM MUA NGUYÊN LIỆU THEO VỊ TRÍ & TÚI TIỀN -->
+        <div id="locationBanner" class="bg-white border border-gray-200 rounded p-3 mb-4 flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div class="flex items-center gap-2.5">
+            <span class="text-xl">🏪</span>
+            <div>
+              <p class="font-bold text-gray-800">Tìm điểm mua nguyên liệu gần vị trí của bạn (<span id="bannerBudgetText" class="foody-red">ngân sách dưới 100.000đ</span>)</p>
+              <p id="bannerStoreAdvice" class="text-gray-500 mt-0.5">Tích hợp Amazon Location Service gợi ý chợ & siêu thị gần nhất theo túi tiền.</p>
+            </div>
+          </div>
+          <button onclick="openNearbyStoreModal()" class="border border-[#cf2127] text-[#cf2127] hover:bg-[#fff5f5] font-bold px-3 py-1.5 rounded shrink-0">
+            📍 Tìm điểm bán gần tôi
+          </button>
+        </div>
+
+        <!-- LOADING -->
+        <div id="loadingBox" class="hidden bg-white rounded border border-gray-200 p-10 text-center text-sm text-gray-500">
+          ⏳ Đang tải giáo trình nấu ăn từ AWS DynamoDB...
+        </div>
+
+        <!-- LƯỚI THẺ CÔNG THỨC 4 CỘT -->
+        <div id="cardGrid" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3.5"></div>
+
+        <!-- EMPTY STATE -->
+        <div id="emptyBox" class="hidden bg-white rounded border border-gray-200 p-10 text-center">
+          <p class="text-3xl mb-2">🍳</p>
+          <p class="font-bold text-gray-700 text-sm">Chưa tìm thấy công thức phù hợp với bộ lọc hiện tại</p>
+          <p class="text-xs text-gray-500 mt-1">Thử nới rộng chi phí nguyên liệu hoặc hỏi Đầu bếp AI để được gợi ý công thức riêng nhé.</p>
+          <button onclick="resetAllFilters()" class="mt-3 bg-foody-red text-white text-xs font-bold px-4 py-2 rounded">Xem tất cả công thức</button>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <!-- MODAL BÀI HỌC DẠY NẤU ĂN CHI TIẾT -->
+  <div id="recipeModal" class="fixed inset-0 z-50 hidden bg-black/60 flex items-center justify-center p-3 overflow-y-auto">
+    <div class="bg-white rounded-md max-w-3xl w-full max-h-[92vh] overflow-y-auto shadow-2xl border border-gray-200">
+      <div class="sticky top-0 bg-white border-b border-gray-200 px-5 py-3.5 flex items-center justify-between z-10">
+        <div>
+          <span class="text-[11px] font-bold uppercase tracking-wider text-[#cf2127]">📖 Hướng dẫn thực hành nấu ăn</span>
+          <h3 id="modalTitle" class="font-extrabold text-lg text-gray-900">Chi tiết công thức</h3>
+        </div>
+        <button onclick="closeRecipeModal()" class="text-gray-400 hover:text-gray-700 font-bold text-xl px-2">✕</button>
+      </div>
+      <div id="modalBody" class="p-5 space-y-5 text-sm"></div>
+    </div>
+  </div>
+
+  <!-- MODAL TÌM CHỖ MUA NGUYÊN LIỆU GẦN VỊ TRÍ (AMAZON LOCATION SERVICE) -->
+  <div id="storeModal" class="fixed inset-0 z-50 hidden bg-black/60 flex items-center justify-center p-3">
+    <div class="bg-white rounded-md max-w-lg w-full shadow-2xl border border-gray-200 overflow-hidden">
+      <div class="bg-foody-red text-white px-4 py-3 flex items-center justify-between">
+        <h3 class="font-bold text-sm">📍 Tìm chỗ mua nguyên liệu gần bạn & hợp túi tiền</h3>
+        <button onclick="closeStoreModal()" class="text-white/80 hover:text-white font-bold">✕</button>
+      </div>
+      <div class="p-4 space-y-3 text-xs">
+        <div>
+          <label class="block font-bold text-gray-700 mb-1">Nguyên liệu cần mua:</label>
+          <input id="storeIngredientInput" type="text" placeholder="Ví dụ: trứng, thịt heo xay, tôm..." class="w-full border border-gray-300 rounded px-3 py-2 text-sm outline-none focus:border-[#cf2127]">
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="block font-bold text-gray-700 mb-1">Mức ngân sách:</label>
+            <select id="storeBudgetSelect" class="w-full border border-gray-300 rounded px-2.5 py-2 text-xs bg-white">
+              <option value="low">Tiết kiệm (&lt; 35.000đ) — Chợ / Tạp hóa</option>
+              <option value="mid" selected>Vừa phải (35k - 70k) — Siêu thị mini</option>
+              <option value="high">Thoải mái (&gt; 70.000đ) — Siêu thị lớn</option>
+            </select>
+          </div>
+          <div>
+            <label class="block font-bold text-gray-700 mb-1">Vị trí của bạn:</label>
+            <button onclick="detectLocation(true)" class="w-full border border-gray-300 hover:bg-gray-50 rounded px-2.5 py-2 font-semibold text-gray-700">
+              📡 Cập nhật GPS hiện tại
+            </button>
+          </div>
+        </div>
+        <div>
+          <label class="block font-bold text-gray-700 mb-1" for="storeAddressInput">Hoặc nhập địa chỉ muốn tìm quanh đó:</label>
+          <div class="flex gap-2">
+            <input id="storeAddressInput" type="text" maxlength="200" placeholder="Ví dụ: 123 Nguyễn Huệ, Quận 1, TP.HCM" class="min-w-0 flex-1 border border-gray-300 rounded px-3 py-2 text-sm outline-none focus:border-[#cf2127]">
+            <button type="button" onclick="renderNearbyStores()" class="shrink-0 bg-foody-red text-white rounded px-4 py-2 font-bold">Tìm</button>
+          </div>
+          <p class="mt-1 text-[11px] text-gray-500">Nếu để trống, hệ thống dùng vị trí GPS (nếu đã cấp quyền).</p>
+        </div>
+        <div id="storeResultList" class="border-t border-gray-200 pt-3 space-y-2 max-h-60 overflow-y-auto"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CHATBOT ĐẦU BẾP AI TÂM LÝ (AMAZON BEDROCK) -->
+  <div class="fixed bottom-4 right-4 z-40">
+    <div id="chatWindow" class="hidden mb-2 w-80 sm:w-96 bg-white rounded-md shadow-2xl border border-gray-300 overflow-hidden flex flex-col">
+      <div class="bg-foody-red text-white px-3.5 py-2.5 flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <span>👨‍🍳</span>
+          <div>
+            <p class="font-bold text-xs">Đầu Bếp AI Tâm Lý (Amazon Bedrock)</p>
+            <p class="text-[10px] text-red-100">Gợi ý món theo tâm trạng, thời tiết & nguyên liệu</p>
+          </div>
+        </div>
+        <button onclick="toggleChatbot()" class="text-white/80 hover:text-white font-bold text-sm">✕</button>
+      </div>
+
+      <div id="chatMessages" class="p-3 h-72 overflow-y-auto space-y-2.5 bg-[#f9f9f9] text-xs">
+        <div class="bg-white border border-gray-200 rounded p-2.5 text-gray-700 shadow-2xs">
+          Xin chào! Hôm nay thời tiết chỗ bạn thế nào, hay tâm trạng của bạn đang ra sao? Chọn nhanh gợi ý bên dưới hoặc nhắn cho mình biết nhé!
+        </div>
+      </div>
+
+      <!-- Chip gợi ý nhanh theo Tâm trạng & Thời tiết -->
+      <div class="px-2.5 py-2 bg-gray-50 border-t border-gray-200 flex gap-1.5 overflow-x-auto text-[11px]">
+        <button onclick="askQuickPrompt('Trời đang mưa se lạnh, nấu món gì ấm bụng?')" class="shrink-0 bg-white border border-gray-300 hover:border-[#cf2127] hover:text-[#cf2127] rounded-full px-2.5 py-1 font-medium">
+          🌧️ Trời mưa lạnh
+        </button>
+        <button onclick="askQuickPrompt('Trời nắng nóng quá, gợi ý món gì thanh mát dễ ăn?')" class="shrink-0 bg-white border border-gray-300 hover:border-[#cf2127] hover:text-[#cf2127] rounded-full px-2.5 py-1 font-medium">
+          ☀️ Nắng nóng
+        </button>
+        <button onclick="askQuickPrompt('Hôm nay mình hơi buồn và stress, nấu món gì cho thư giãn?')" class="shrink-0 bg-white border border-gray-300 hover:border-[#cf2127] hover:text-[#cf2127] rounded-full px-2.5 py-1 font-medium">
+          😔 Buồn / Stress
+        </button>
+        <button onclick="askQuickPrompt('Mình đang mệt và cần món nhiều năng lượng, dễ làm')" class="shrink-0 bg-white border border-gray-300 hover:border-[#cf2127] hover:text-[#cf2127] rounded-full px-2.5 py-1 font-medium">
+          ⚡ Cần năng lượng
+        </button>
+      </div>
+
+      <div class="p-2 bg-white border-t border-gray-200 flex gap-1.5">
+        <input id="chatInput" type="text" placeholder="Ví dụ: Trời mưa buồn quá ăn gì ngon?" class="flex-1 border border-gray-300 rounded px-2.5 py-1.5 text-xs outline-none focus:border-[#cf2127]" onkeydown="if(event.key==='Enter') sendChatMessage()">
+        <button onclick="sendChatMessage()" class="bg-foody-red text-white font-bold px-3 py-1.5 rounded text-xs">Gửi</button>
+      </div>
+    </div>
+
+    <button onclick="toggleChatbot()" class="ml-auto bg-foody-red text-white rounded-full px-4 py-3 shadow-lg flex items-center gap-2 font-bold text-xs hover:scale-105 transition">
+      <span class="text-base">💬</span><span>Hỏi Đầu Bếp AI</span>
+    </button>
+  </div>
+
+  <script>
+    const API_BASE = "https://1f10tq33a6.execute-api.ap-southeast-1.amazonaws.com/prod";
+    const SEARCH_API = `${API_BASE}/search`;
+    const STORES_API = `${API_BASE}/nearby-stores`;
+    const CHAT_API = `${API_BASE}/chat`;
+
+    let currentTab = "newest";
+    let currentCategory = "all";
+    let allRecipes = [];
+    let savedIds = JSON.parse(localStorage.getItem("btm_saved_recipes") || "[]");
+    let userCoords = null;
+    let activeTimers = {};
+    let chatSuggestedHistory = [];
+
+    const formatMoney = (vnd) => new Intl.NumberFormat("vi-VN").format(vnd || 0) + "đ";
+    const difficultyLabel = (d) => d === "medium" ? "Trung bình" : "Dễ làm";
+
+    async function fetchRecipesFromAWS(keyword = "") {
+      const loadingBox = document.getElementById("loadingBox");
+      const cardGrid = document.getElementById("cardGrid");
+      loadingBox.classList.remove("hidden");
+      cardGrid.innerHTML = "";
+
+      try {
+        const url = keyword ? `${SEARCH_API}?ingredients=${encodeURIComponent(keyword)}` : SEARCH_API;
+        const res = await fetch(url);
+        const data = await res.json();
+        allRecipes = Array.isArray(data.recipes) ? data.recipes : [];
+      } catch (err) {
+        console.error("Lỗi gọi API AWS:", err);
+        allRecipes = [];
+      } finally {
+        loadingBox.classList.add("hidden");
+        applyClientFilters();
+      }
+    }
+
+    function selectSidebarCategory(cat, el) {
+      document.querySelectorAll("#sidebarNav .sidebar-item").forEach(item => item.classList.remove("active"));
+      if (el) el.classList.add("active");
+
+      if (cat === "vegetarian") {
+        currentCategory = "all";
+        document.getElementById("difficultyFilter").value = "vegetarian";
+      } else {
+        currentCategory = cat;
+        if (document.getElementById("difficultyFilter").value === "vegetarian") {
+          document.getElementById("difficultyFilter").value = "all";
+        }
+      }
+      switchTab("newest");
+    }
+
+    function switchTab(tab) {
+      currentTab = tab;
+      document.querySelectorAll(".tab-btn").forEach(btn => {
+        btn.classList.toggle("active", btn.dataset.tab === tab);
+      });
+      applyClientFilters();
+    }
+
+    function updateBudgetFilter(val) {
+      const formatted = formatMoney(Number(val));
+      document.getElementById("sidebarBudgetLabel").textContent = formatted;
+      document.getElementById("bannerBudgetText").textContent = "ngân sách dưới " + formatted;
+      const el = document.getElementById("bannerStoreAdvice");
+      if (Number(val) <= 35000) {
+        el.textContent = "Túi tiền tiết kiệm: Nên mua lẻ tại Chợ truyền thống hoặc Tạp hóa gần nhà để tối ưu chi phí.";
+      } else if (Number(val) <= 70000) {
+        el.textContent = "Ngân sách vừa phải: Gợi ý mua tại Bách Hóa Xanh, WinMart+ hoặc Co.op Food gần vị trí của bạn.";
+      } else {
+        el.textContent = "Ngân sách thoải mái: Có thể chọn mua thực phẩm tươi đóng gói chuẩn tại Co.opmart, Tops Market.";
+      }
+      applyClientFilters();
+    }
+
+    function executeSearch() {
+      const kw = document.getElementById("searchInput").value.trim();
+      fetchRecipesFromAWS(kw);
+    }
+
+    function applyClientFilters() {
+      const maxBudget = Number(document.getElementById("budgetRange").value);
+      const mood = document.getElementById("moodFilter").value;
+      const diff = document.getElementById("difficultyFilter").value;
+
+      document.getElementById("totalBadge").textContent = allRecipes.length;
+
+      const filtered = allRecipes.filter(item => {
+        const cost = Number(item.EstimatedCostVND || 0);
+        const time = Number(item.CookingTimeMinutes || item.TotalTimeMinutes || 20);
+
+        if (cost > maxBudget) return false;
+        if (currentCategory !== "all" && item.Category !== currentCategory) return false;
+        if (mood !== "all" && !(item.MoodTags || []).includes(mood)) return false;
+        if (diff === "vegetarian" && !(item.DietTags || []).includes("vegetarian")) return false;
+        if ((diff === "easy" || diff === "medium") && item.Difficulty !== diff) return false;
+        if (currentTab === "budget" && cost > 30000) return false;
+        if (currentTab === "quick" && time > 20) return false;
+        if (currentTab === "saved" && !savedIds.includes(item.RecipeID)) return false;
+
+        return true;
+      });
+
+      renderCards(filtered);
+    }
+
+    function renderCards(items) {
+      const grid = document.getElementById("cardGrid");
+      const emptyBox = document.getElementById("emptyBox");
+      document.getElementById("savedCountSide").textContent = savedIds.length;
+
+      if (!items.length) {
+        grid.innerHTML = "";
+        emptyBox.classList.remove("hidden");
+        return;
+      }
+      emptyBox.classList.add("hidden");
+
+      grid.innerHTML = items.map(item => {
+        const isSaved = savedIds.includes(item.RecipeID);
+        const tip = (item.ChefTips && item.ChefTips[0]) ? item.ChefTips[0] : (item.Description || "Món ngon dễ làm tại nhà.");
+        const subText = `Nguyên liệu: ${(item.Ingredients || []).slice(0, 4).join(", ")}`;
+
+        return `
+          <article class="foody-card">
+            <div class="relative h-40 bg-gray-100 cursor-pointer overflow-hidden" onclick="openRecipeDetail('${item.RecipeID}')">
+              <img src="${item.ImageURL || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=600&q=80'}" alt="${item.Name}" class="w-full h-full object-cover hover:scale-105 transition duration-300">
+              <span class="absolute top-2 left-2 bg-black/70 text-white text-[11px] font-bold px-2 py-0.5 rounded-xs">
+                ~${formatMoney(item.EstimatedCostVND)}
+              </span>
+              <span class="absolute top-2 right-2 bg-[#cf2127] text-white text-[10px] font-bold px-2 py-0.5 rounded-xs">
+                ${difficultyLabel(item.Difficulty)}
+              </span>
+              <span class="absolute bottom-2 right-2 bg-white/95 text-gray-800 text-[11px] font-semibold px-2 py-0.5 rounded-xs shadow-2xs">
+                ⏱ ${item.CookingTimeMinutes || 20} phút nấu
+              </span>
+            </div>
+
+            <div class="p-3 flex-1 flex flex-col">
+              <h3 onclick="openRecipeDetail('${item.RecipeID}')" class="font-bold text-sm text-gray-900 hover:text-[#cf2127] cursor-pointer line-clamp-1" title="${item.Name}">
+                ${item.Name}
+              </h3>
+              <p class="text-xs text-gray-500 mt-0.5 line-clamp-1" title="${subText}">
+                ${subText}
+              </p>
+
+              <div class="mt-2.5 pt-2.5 border-t border-gray-100 flex items-start gap-2 flex-1">
+                <span class="w-6 h-6 rounded-full bg-red-100 text-[#cf2127] font-bold text-[11px] flex items-center justify-center shrink-0">👨‍🍳</span>
+                <p class="text-xs text-gray-600 line-clamp-2 leading-snug">
+                  <strong class="text-gray-800">Mẹo bếp:</strong> ${tip}
+                </p>
+              </div>
+            </div>
+
+            <div class="px-3 py-2 bg-[#fafafa] border-t border-gray-100 flex items-center justify-between text-xs text-gray-500">
+              <button onclick="openNearbyStoreModal('${(item.Ingredients || []).join(", ")}')" class="hover:text-[#cf2127] font-medium flex items-center gap-1" title="Tìm nơi mua nguyên liệu">
+                <span>📍</span><span>Chỗ mua</span>
+              </button>
+              <div class="flex items-center gap-1.5">
+                <button onclick="openRecipeDetail('${item.RecipeID}')" class="px-2 py-1 rounded-xs bg-red-50 text-[#cf2127] hover:bg-red-100 font-bold text-[11px]">
+                  Học nấu
+                </button>
+                <button onclick="toggleSaveRecipe('${item.RecipeID}')" class="px-2 py-1 rounded-xs border ${isSaved ? 'bg-[#cf2127] text-white border-[#cf2127]' : 'bg-white text-gray-600 border-gray-300 hover:border-gray-400'} font-semibold text-[11px]">
+                  ${isSaved ? '✓' : '🔖'}
+                </button>
+              </div>
+            </div>
+          </article>
+        `;
+      }).join("");
+    }
+
+    function openRecipeDetail(id) {
+      const item = allRecipes.find(r => r.RecipeID === id);
+      if (!item) return;
+
+      document.getElementById("modalTitle").textContent = item.Name;
+
+      const prepHtml = (item.Preparation && item.Preparation.length)
+        ? `<div class="bg-gray-50 border border-gray-200 rounded p-3 text-xs space-y-1">
+             <p class="font-bold text-gray-800">🔪 Chuẩn bị trước khi nấu (${item.PrepTimeMinutes || 10} phút):</p>
+             ${item.Preparation.map(p => `<p>• ${p}</p>`).join("")}
+           </div>`
+        : "";
+
+      const stepsHtml = (item.CookingSteps && item.CookingSteps.length)
+        ? item.CookingSteps.map((s, idx) => {
+            const secs = Math.max(30, Math.round(Number(s.DurationMinutes || 5) * 60));
+            const timerId = `timer_${id}_${idx}`;
+            return `
+              <div class="border border-gray-200 rounded p-3.5 bg-gray-50">
+                <div class="flex flex-wrap justify-between items-center gap-2 mb-1.5">
+                  <span class="font-bold text-sm text-[#cf2127]">Bước ${s.Step}: ${s.Title}</span>
+                  <div class="flex items-center gap-1.5">
+                    <span class="text-xs bg-white border border-gray-200 px-2 py-0.5 rounded">🔥 Lửa: ${s.HeatLevel || 'Vừa'}</span>
+                    <button id="${timerId}" onclick="startStepTimer('${timerId}', ${secs})" class="text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-2.5 py-0.5 rounded">
+                      ⏱ Bấm giờ (${s.DurationMinutes}p)
+                    </button>
+                  </div>
+                </div>
+                <p class="text-gray-700 leading-relaxed">${s.Description}</p>
+                ${s.CompletionCue ? `<p class="text-xs text-emerald-700 font-medium mt-1.5">✓ Dấu hiệu đạt: ${s.CompletionCue}</p>` : ''}
+              </div>`;
+          }).join("")
+        : (item.Instructions || []).map((inst, idx) => `<p class="p-2.5 bg-gray-50 rounded border border-gray-200"><strong>Bước ${idx + 1}:</strong> ${inst}</p>`).join("");
+
+      const ingHtml = (item.IngredientDetails && item.IngredientDetails.length)
+        ? item.IngredientDetails.map(ing => `
+            <label class="flex items-center justify-between py-1.5 border-b border-gray-100 cursor-pointer hover:bg-gray-50 px-1">
+              <span class="flex items-center gap-2">
+                <input type="checkbox" class="accent-[#cf2127] w-3.5 h-3.5">
+                <span><strong>${ing.Name}</strong> <em class="text-gray-500">(${ing.Preparation || 'Sơ chế sạch'})</em></span>
+              </span>
+              <strong class="text-gray-800 shrink-0 ml-2">${ing.Quantity} ${ing.Unit}</strong>
+            </label>`).join("")
+        : (item.Ingredients || []).map(ing => `<li>• ${ing}</li>`).join("");
+
+      const nutrition = item.Nutrition || {};
+      const nutritionHtml = nutrition.CaloriesKcal ? `
+        <div class="grid grid-cols-4 gap-2 text-center bg-gray-50 border border-gray-200 rounded p-2.5 text-xs">
+          <div><p class="text-gray-400">Năng lượng</p><strong class="text-gray-800">${nutrition.CaloriesKcal} kcal</strong></div>
+          <div><p class="text-gray-400">Chất đạm</p><strong class="text-gray-800">${nutrition.ProteinG}g</strong></div>
+          <div><p class="text-gray-400">Tinh bột</p><strong class="text-gray-800">${nutrition.CarbsG}g</strong></div>
+          <div><p class="text-gray-400">Chất béo</p><strong class="text-gray-800">${nutrition.FatG}g</strong></div>
+        </div>` : "";
+
+      const subsHtml = (item.Substitutions && item.Substitutions.length)
+        ? `<div class="bg-purple-50 border border-purple-200 rounded p-3 text-xs space-y-1">
+             <p class="font-bold text-purple-900">🔄 Nguyên liệu có thể thay thế:</p>
+             ${item.Substitutions.map(sub => `<p>• Nếu thiếu <strong>${sub.Ingredient}</strong> → thay bằng: ${(sub.Alternatives || []).join(", ")}</p>`).join("")}
+           </div>`
+        : "";
+
+      const mistakesHtml = (item.CommonMistakes && item.CommonMistakes.length)
+        ? `<div class="bg-amber-50 border border-amber-200 rounded p-3 text-xs space-y-1.5">
+             <p class="font-bold text-amber-900">⚠️ Lỗi thường gặp khi nấu & cách khắc phục:</p>
+             ${item.CommonMistakes.map(m => `<p>• <strong>${m.Mistake}:</strong> ${m.Fix}</p>`).join("")}
+           </div>`
+        : "";
+
+      const tipsHtml = (item.ChefTips && item.ChefTips.length)
+        ? `<div class="bg-blue-50 border border-blue-200 rounded p-3 text-xs space-y-1">
+             <p class="font-bold text-blue-900">💡 Bí quyết từ đầu bếp:</p>
+             ${item.ChefTips.map(t => `<p>• ${t}</p>`).join("")}
+           </div>`
+        : "";
+
+      const storageHtml = (item.Storage || item.Reheating)
+        ? `<div class="bg-gray-50 border border-gray-200 rounded p-3 text-xs text-gray-600 space-y-1">
+             ${item.Storage ? `<p><strong>❄️ Bảo quản:</strong> ${item.Storage}</p>` : ''}
+             ${item.Reheating ? `<p><strong>♨️ Hâm nóng:</strong> ${item.Reheating}</p>` : ''}
+           </div>`
+        : "";
+
+      document.getElementById("modalBody").innerHTML = `
+        <div class="grid sm:grid-cols-2 gap-4">
+          <img src="${item.ImageURL}" class="w-full h-56 object-cover rounded border border-gray-200">
+          <div class="space-y-2.5">
+            <p class="text-gray-600 leading-relaxed">${item.Description || ''}</p>
+            <div class="flex flex-wrap gap-2 text-xs font-semibold">
+              <span class="bg-red-50 text-[#cf2127] px-2.5 py-1 rounded">💰 Chi phí: ~${formatMoney(item.EstimatedCostVND)}</span>
+              <span class="bg-gray-100 text-gray-700 px-2.5 py-1 rounded">⏱ Nấu: ${item.CookingTimeMinutes || 20}p (Tổng ${item.TotalTimeMinutes || 30}p)</span>
+              <span class="bg-emerald-50 text-emerald-700 px-2.5 py-1 rounded">👥 Khẩu phần: ${item.Servings || 2} người</span>
+            </div>
+            ${nutritionHtml}
+            <div class="flex gap-2 pt-1">
+              <button onclick="closeRecipeModal(); openNearbyStoreModal('${(item.Ingredients || []).join(", ")}')" class="flex-1 bg-foody-red text-white font-bold py-2 rounded text-xs">
+                📍 Tìm chỗ mua nguyên liệu
+              </button>
+              <button onclick="closeRecipeModal(); toggleChatbot('Tôi đang nấu món ${item.Name}, hãy cho tôi thêm mẹo nấu ngon hơn!')" class="border border-gray-300 hover:bg-gray-50 text-gray-700 font-bold px-3 py-2 rounded text-xs">
+                🤖 Hỏi AI món này
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <h4 class="font-bold text-base text-gray-900 mb-2">🥗 Định lượng & Sơ chế nguyên liệu (Tích chọn khi chuẩn bị xong)</h4>
+          <div class="text-xs bg-white border border-gray-200 rounded p-3">${ingHtml}</div>
+        </div>
+
+        ${prepHtml}
+
+        <div>
+          <h4 class="font-bold text-base text-gray-900 mb-2">👨‍🍳 Các bước thực hiện chi tiết</h4>
+          <div class="space-y-2.5 text-xs">${stepsHtml}</div>
+        </div>
+
+        ${tipsHtml}
+        ${subsHtml}
+        ${mistakesHtml}
+        ${storageHtml}
+      `;
+      document.getElementById("recipeModal").classList.remove("hidden");
+    }
+
+    function startStepTimer(btnId, totalSeconds) {
+      if (activeTimers[btnId]) {
+        clearInterval(activeTimers[btnId]);
+        delete activeTimers[btnId];
+      }
+      let remaining = totalSeconds;
+      const btn = document.getElementById(btnId);
+      activeTimers[btnId] = setInterval(() => {
+        if (!btn) return;
+        if (remaining <= 0) {
+          clearInterval(activeTimers[btnId]);
+          btn.textContent = "✅ Đã hết giờ!";
+          btn.classList.replace("bg-emerald-600", "bg-[#cf2127]");
+          return;
+        }
+        const m = String(Math.floor(remaining / 60)).padStart(2, "0");
+        const s = String(remaining % 60).padStart(2, "0");
+        btn.textContent = `⏳ ${m}:${s}`;
+        remaining--;
+      }, 1000);
+    }
+
+    function closeRecipeModal() {
+      Object.values(activeTimers).forEach(clearInterval);
+      activeTimers = {};
+      document.getElementById("recipeModal").classList.add("hidden");
+    }
+
+    function toggleSaveRecipe(id) {
+      if (savedIds.includes(id)) savedIds = savedIds.filter(x => x !== id);
+      else savedIds.push(id);
+      localStorage.setItem("btm_saved_recipes", JSON.stringify(savedIds));
+      applyClientFilters();
+    }
+
+    function detectLocation(refreshModal = false) {
+      if (refreshModal) document.getElementById("storeAddressInput").value = "";
+      const label = document.getElementById("locationLabel");
+      const listBox = document.getElementById("storeResultList");
+      label.textContent = "Đang định vị...";
+      if (!navigator.geolocation) {
+        label.textContent = "Không hỗ trợ GPS";
+        if (refreshModal) listBox.innerHTML = '<p class="text-red-600 py-3">Trình duyệt này không hỗ trợ định vị GPS.</p>';
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        pos => {
+          userCoords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+          const accuracy = Math.round(pos.coords.accuracy || 0);
+          label.textContent = accuracy > 1000 ? `GPS lệch ~${accuracy}m` : "Gần tôi (GPS)";
+          if (refreshModal) {
+            if (accuracy > 1000) {
+              listBox.innerHTML = `<p class="text-amber-700 py-2">GPS hiện chỉ chính xác khoảng ${accuracy} m. Hãy bật định vị chính xác hoặc nhập địa chỉ để có kết quả tốt hơn.</p>`;
+            }
+            renderNearbyStores();
+          }
+        },
+        err => {
+          userCoords = null;
+          label.textContent = "Không lấy được GPS";
+          const messages = {
+            1: "Bạn chưa cấp quyền vị trí cho website. Hãy cho phép Location trong cài đặt trang web.",
+            2: "Thiết bị/trình duyệt chưa xác định được vị trí. Hãy thử bật Location Services hoặc nhập địa chỉ.",
+            3: "Định vị quá thời gian chờ. Hãy thử lại hoặc nhập địa chỉ."
+          };
+          if (refreshModal) {
+            listBox.innerHTML = `<p class="text-red-600 py-2">${messages[err.code] || "Không lấy được vị trí GPS."}</p>`;
+          }
+        },
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+      );
+    }
+
+    function openNearbyStoreModal(ingredients = "") {
+      document.getElementById("storeIngredientInput").value = ingredients || document.getElementById("searchInput").value.trim() || "trứng, thịt heo, rau củ";
+      document.getElementById("storeModal").classList.remove("hidden");
+      renderNearbyStores();
+    }
+
+    function closeStoreModal() { document.getElementById("storeModal").classList.add("hidden"); }
+
+    async function renderNearbyStores() {
+      const ing = document.getElementById("storeIngredientInput").value.trim() || "thực phẩm tươi";
+      const tier = document.getElementById("storeBudgetSelect").value;
+      const listBox = document.getElementById("storeResultList");
+
+      const lat = userCoords ? userCoords.lat : 10.7769;
+      const lng = userCoords ? userCoords.lng : 106.7009;
+      const manualAddress = document.getElementById("storeAddressInput").value.trim();
+
+      listBox.innerHTML = `<p class="text-center text-gray-500 py-4">⏳ Đang truy vấn Amazon Location Service quanh vị trí của bạn...</p>`;
+
+      try {
+        const params = new URLSearchParams({ ingredients: ing, tier: tier });
+        if (manualAddress) {
+          params.set("address", manualAddress);
+        } else {
+          params.set("lat", String(lat));
+          params.set("lng", String(lng));
+        }
+        const res = await fetch(`${STORES_API}?${params.toString()}`);
+        const data = await res.json();
+
+        const originText = data.origin
+          ? `<p class="text-[11px] text-gray-500 mb-2">📌 Tâm tìm kiếm: <strong>${data.origin.lat.toFixed(5)}, ${data.origin.lng.toFixed(5)}</strong> (bán kính 10 km)</p>`
+          : "";
+        const adviceHtml = `<div class="p-2 bg-amber-50 border border-amber-200 rounded text-amber-900 mb-2">${data.advice || ''}</div>${originText}`;
+
+        if (data.stores && data.stores.length > 0) {
+          const cardsHtml = data.stores.map(s => {
+            const distLabel = s.distanceMeters < 1000
+              ? `${s.distanceMeters} m`
+              : `${(s.distanceMeters / 1000).toFixed(1)} km`;
+
+            const origin = manualAddress
+              ? manualAddress
+              : (data.origin ? `${data.origin.lat},${data.origin.lng}` : `${lat},${lng}`);
+
+            const destinationQuery = (s.name && s.address && s.address !== "Gần vị trí của bạn")
+              ? `${s.name}, ${s.address}`
+              : `${s.lat},${s.lng}`;
+
+            const mapsParams = new URLSearchParams({
+              api: "1",
+              origin: origin,
+              destination: destinationQuery,
+              travelmode: "driving"
+            });
+            const mapsUrl = `https://www.google.com/maps/dir/?${mapsParams.toString()}`;
+
+            return `
+              <div class="p-2.5 border border-gray-200 rounded bg-gray-50 flex items-center justify-between gap-2">
+                <div class="min-w-0">
+                  <div class="flex items-center gap-1.5">
+                    <p class="font-bold text-gray-800 truncate">${s.name}</p>
+                    <span class="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0">Cách ${distLabel}</span>
+                  </div>
+                  <p class="text-gray-500 mt-0.5 line-clamp-1" title="${s.address}">${s.address}</p>
+                </div>
+                <a href="${mapsUrl}" target="_blank" rel="noopener noreferrer" class="bg-foody-red text-white font-bold px-3 py-1.5 rounded shrink-0">
+                  Chỉ đường ↗
+                </a>
+              </div>
+            `;
+          }).join("");
+
+          listBox.innerHTML = adviceHtml + `<div class="space-y-2">${cardsHtml}</div>`;
+          return;
+        }
+
+        const fallbackQuery = tier === "low" ? `chợ gần đây bán ${ing}` : (tier === "mid" ? "Bách Hóa Xanh WinMart+ gần đây" : "siêu thị Co.opmart gần đây");
+        const fallbackLocation = manualAddress
+          ? manualAddress
+          : (data.origin ? `${data.origin.lat},${data.origin.lng}` : `${lat},${lng}`);
+        const fallbackMapsUrl = `https://www.google.com/maps/search/${encodeURIComponent(fallbackQuery + " gần " + fallbackLocation)}`;
+        listBox.innerHTML = adviceHtml + `
+          <div class="p-3 border border-gray-200 rounded bg-gray-50 flex items-center justify-between gap-2">
+            <div>
+              <p class="font-bold text-gray-800">Chưa có cửa hàng khớp bộ lọc trong bán kính 10 km</p>
+              <p class="text-gray-500 mt-0.5">Thử đổi mức ngân sách hoặc mở trực tiếp trên Google Maps.</p>
+            </div>
+            <a href="${fallbackMapsUrl}" target="_blank" rel="noopener noreferrer" class="bg-foody-red text-white font-bold px-3 py-1.5 rounded shrink-0">
+              Mở bản đồ ↗
+            </a>
+          </div>
+        `;
+      } catch (err) {
+        listBox.innerHTML = `<p class="text-red-600 py-2">Không thể kết nối API địa điểm: ${err.message}</p>`;
+      }
+    }
+
+    document.getElementById("storeBudgetSelect").addEventListener("change", renderNearbyStores);
+    document.getElementById("storeIngredientInput").addEventListener("input", renderNearbyStores);
+    document.getElementById("storeAddressInput")?.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        renderNearbyStores();
+      }
+    });
+
+    function toggleChatbot(prefillText = "") {
+      const win = document.getElementById("chatWindow");
+      win.classList.toggle("hidden");
+      if (prefillText) {
+        document.getElementById("chatInput").value = prefillText;
+        sendChatMessage();
+      }
+    }
+
+    function askQuickPrompt(text) {
+      document.getElementById("chatInput").value = text;
+      sendChatMessage();
+    }
+
+    async function sendChatMessage() {
+      const input = document.getElementById("chatInput");
+      const msg = input.value.trim();
+      if (!msg) return;
+
+      const box = document.getElementById("chatMessages");
+      box.innerHTML += `<div class="ml-8 bg-[#cf2127] text-white rounded p-2.5">${msg}</div>`;
+      input.value = "";
+      box.scrollTop = box.scrollHeight;
+
+      const loadingId = "chat_wait_" + Date.now();
+      box.innerHTML += `<div id="${loadingId}" class="mr-6 bg-white border border-gray-200 rounded p-2.5 text-gray-400">⏳ Đầu bếp AI đang chọn món phù hợp...</div>`;
+      box.scrollTop = box.scrollHeight;
+
+      try {
+        const res = await fetch(CHAT_API, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: msg,
+            excludeIds: chatSuggestedHistory
+          })
+        });
+        const data = await res.json();
+
+        if (data.suggestedRecipeId && !chatSuggestedHistory.includes(data.suggestedRecipeId)) {
+          chatSuggestedHistory.push(data.suggestedRecipeId);
+          if (chatSuggestedHistory.length > 6) chatSuggestedHistory.shift();
+        }
+
+        const actionBtn = data.suggestedRecipeId
+          ? `<button onclick="openRecipeDetail('${data.suggestedRecipeId}')" class="mt-2 w-full bg-red-50 hover:bg-red-100 text-[#cf2127] border border-red-200 font-bold py-1.5 px-2 rounded text-[11px] text-center">
+               📖 Xem hướng dẫn nấu: ${data.suggestedRecipeName || 'Món gợi ý'} →
+             </button>`
+          : "";
+
+        document.getElementById(loadingId).outerHTML = `
+          <div class="mr-6 bg-white border border-gray-200 rounded p-2.5 text-gray-700 shadow-2xs leading-relaxed">
+            <div>${data.reply}</div>
+            ${actionBtn}
+          </div>`;
+      } catch (err) {
+        document.getElementById(loadingId).outerHTML = `<div class="mr-6 bg-white border border-gray-200 rounded p-2.5 text-gray-700">Mình gặp chút gián đoạn kết nối. Bạn thử bấm lại hoặc chọn công thức trực tiếp trên màn hình nhé!</div>`;
+      }
+      box.scrollTop = box.scrollHeight;
+    }
+
+    function resetAllFilters() {
+      document.getElementById("searchInput").value = "";
+      document.getElementById("budgetRange").value = 100000;
+      document.getElementById("sidebarBudgetLabel").textContent = "100.000đ";
+      document.getElementById("moodFilter").value = "all";
+      document.getElementById("difficultyFilter").value = "all";
+      selectSidebarCategory("all", document.querySelector('#sidebarNav .sidebar-item[data-cat="all"]'));
+      fetchRecipesFromAWS("");
+    }
+
+    fetchRecipesFromAWS("");
+  </script>
+</body>
+</html>
